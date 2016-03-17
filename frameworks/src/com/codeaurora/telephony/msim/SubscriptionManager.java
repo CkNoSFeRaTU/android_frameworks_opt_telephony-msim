@@ -135,6 +135,7 @@ public class SubscriptionManager extends Handler {
     private static final int EVENT_SET_PRIORITY_SUBSCRIPTION_DONE = 11;
     private static final int EVENT_SET_DEFAULT_VOICE_SUBSCRIPTION_DONE = 12;
     private static final int EVENT_SHUTDOWN_ACTION_RECEIVED = 13;
+    private static final int EVENT_SET_SUBSCRIPTION_MODE_DONE = 14;
 
     // Set Subscription Return status
     public static final String SUB_ACTIVATE_SUCCESS = "ACTIVATE SUCCESS";
@@ -161,6 +162,8 @@ public class SubscriptionManager extends Handler {
     // The User preferred subscription information
     private SubscriptionData mUserPrefSubs = null;
     private CardSubscriptionManager mCardSubMgr;
+    
+    private boolean mSetSubsModeRequired = true;
 
     private boolean[] mCardInfoAvailable = new boolean[mNumPhones];
     private boolean[] mIsNewCard = new boolean[mNumPhones];
@@ -349,6 +352,11 @@ public class SubscriptionManager extends Handler {
                 processAllCardsInfoAvailable();
                 break;
 
+            case EVENT_SET_SUBSCRIPTION_MODE_DONE:
+                logd("EVENT_SET_SUBSCRIPTION_MODE_DONE");
+                processSetSubscriptionModeDone();
+                break;
+
             case EVENT_SET_UICC_SUBSCRIPTION_DONE:
                 logd("EVENT_SET_UICC_SUBSCRIPTION_DONE");
                 processSetUiccSubscriptionDone((AsyncResult)msg.obj);
@@ -383,6 +391,7 @@ public class SubscriptionManager extends Handler {
                 Rlog.d(LOG_TAG, "EVENT_SET_PRIORITY_SUBSCRIPTION_DONE");
                 processSetPrioritySubscriptionDone((AsyncResult)msg.obj);
                 break;
+
             case EVENT_SET_DEFAULT_VOICE_SUBSCRIPTION_DONE:
                 Rlog.d(LOG_TAG, "EVENT_SET_DEFAULT_VOICE_SUBSCRIPTION_DONE");
                 processSetDefaultVoiceSubscriptionDone((AsyncResult)msg.obj);
@@ -997,6 +1006,13 @@ public class SubscriptionManager extends Handler {
     }
 
     /**
+     * Handles EVENT_SET_SUBSCRIPTION_MODE_DONE.
+     */
+    private void processSetSubscriptionModeDone() {
+        startNextPendingActivateRequests();
+    }
+
+    /**
      * Handles EVENT_ALL_CARDS_INFO_AVAILABLE.
      */
     private void processAllCardsInfoAvailable() {
@@ -1230,6 +1246,7 @@ public class SubscriptionManager extends Handler {
                 + " reason = " + reason);
 
         mCardInfoAvailable[cardIndex] = false;
+        mSetSubsModeRequired = true;
 
         // Set subscription is required if both the cards are unavailable
         // and when those are available next time!
@@ -1368,6 +1385,13 @@ public class SubscriptionManager extends Handler {
         logd("processActivateRequests: mSetSubscriptionInProgress = "
                  + mSetSubscriptionInProgress);
         if (!mSetSubscriptionInProgress) {
+            if (mSetSubsModeRequired) {
+                mSetSubscriptionInProgress = setSubscriptionMode();
+                if (mSetSubscriptionInProgress) {
+                    mSetSubsModeRequired = false;
+                }
+                return;
+            }
             mSetSubscriptionInProgress = startNextPendingActivateRequests();
         }
     }
@@ -1506,6 +1530,34 @@ public class SubscriptionManager extends Handler {
     public boolean isSubActive(int subscription) {
         Subscription currentSelSub = getCurrentSubscription(subscription);
         return (currentSelSub.subStatus == SubscriptionStatus.SUB_ACTIVATED);
+    }
+
+    /**
+     * Set subscription mode.  Count number of activate requests and
+     * set the mode only if the count is 1 or 2.
+     * @return true if set subscription mode is started.
+     */
+    private boolean setSubscriptionMode() {
+        // If subscription mode is not set
+        int numSubsciptions = 0;
+        for (SubscriptionId sub: SubscriptionId.values()) {
+            Subscription pendingSub = mActivatePending.get(sub);
+            if (pendingSub != null
+                    && pendingSub.subStatus == SubscriptionStatus.SUB_ACTIVATE) {
+                numSubsciptions++;
+            }
+        }
+
+        logd("setSubscriptionMode numSubsciptions = " + numSubsciptions);
+
+        if (numSubsciptions > 0 && numSubsciptions <= NUM_SUBSCRIPTIONS) {
+            Message setSubsModeDone = Message.obtain(this,
+                    EVENT_SET_SUBSCRIPTION_MODE_DONE,
+                    null);
+            mCi[0].setSubscriptionMode(numSubsciptions, setSubsModeDone);
+            return true;
+        }
+        return false;
     }
 
     /**
